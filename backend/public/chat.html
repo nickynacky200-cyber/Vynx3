@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell" id="appShell" style="position:relative;">
+  <div class="convo-header">
+    <a href="chats.html" class="back">‹</a>
+    <div class="avatar" id="otherAvatar" style="width:38px;height:38px;font-size:0.7rem;"></div>
+    <div>
+      <div class="name" id="otherName">…</div>
+      <div class="status" id="typingStatus"></div>
+    </div>
+  </div>
+  <div class="messages" id="messages"></div>
+
+  <div class="composer" id="composer">
+    <button class="attach-btn" id="attachBtn" type="button">📎</button>
+    <input class="input" id="messageInput" placeholder="Message…" autocomplete="off">
+    <button class="mic-btn" id="micBtn" type="button">🎤</button>
+    <button class="send" id="sendBtn">➤</button>
+
+    <div class="attach-menu hidden" id="attachMenu">
+      <button id="attachPhotoBtn"><span class="attach-icon">🖼️</span>Photo</button>
+      <button id="attachDocBtn"><span class="attach-icon">📄</span>Document</button>
+    </div>
+  </div>
+
+  <input type="file" id="photoInput" accept="image/*" style="display:none;">
+  <input type="file" id="docInput" style="display:none;">
+
+  <!-- Attachment preview: recipient name + Send button stay visible together -->
+  <div class="attach-preview-overlay hidden" id="previewOverlay">
+    <div class="attach-preview-header">
+      <div class="avatar" id="previewAvatar" style="width:34px;height:34px;font-size:0.65rem;"></div>
+      <div class="name" id="previewName">…</div>
+      <button class="send-btn" id="previewSendBtn">Send</button>
+    </div>
+    <div class="attach-preview-body" id="previewBody"></div>
+  </div>
+</div>
+
+<script src="socket.io/socket.io.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+const me = Api.user();
+const params = new URLSearchParams(window.location.search);
+const handle = params.get('handle');
+const groupId = params.get('group');
+if (!handle && !groupId) window.location.href = 'chats.html';
+const isGroup = !!groupId;
+
+const messagesEl = document.getElementById('messages');
+const input = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+const typingStatus = document.getElementById('typingStatus');
+let conversationId = null;
+let otherUserId = null; // DMs only
+let groupMembersById = {}; // groups only — id -> {full_name, ...}
+let typingTimeout = null;
+let pendingFile = null;
+let pendingKind = null; // 'image' | 'file'
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function senderName(senderId) {
+  if (isGroup) return groupMembersById[senderId]?.full_name || 'Member';
+  return senderId === otherUserId ? document.getElementById('otherName').textContent : 'You';
+}
+
+function bubbleInnerHTML(msg) {
+  const type = msg.type || msg.message_type || 'text';
+  if (type === 'image') return `<img src="${msg.mediaUrl || msg.media_url}" alt="">`;
+  if (type === 'voice') {
+    const dur = msg.mediaDuration || msg.media_duration;
+    return `<div class="bubble-voice">🎤<audio controls src="${msg.mediaUrl || msg.media_url}"></audio>${dur ? `<span class="chat-side">${dur}s</span>` : ''}</div>`;
+  }
+  if (type === 'file') {
+    const name = msg.mediaName || msg.media_name || 'Document';
+    return `<div class="bubble-file"><span class="file-icon">📄</span><a class="file-name" href="${msg.mediaUrl || msg.media_url}" target="_blank" rel="noopener">${escapeHtml(name)}</a></div>`;
+  }
+  return escapeHtml(msg.body);
+}
+
+function bubbleHTML(msg) {
+  const senderId = msg.sender_id ?? msg.senderId;
+  const mine = senderId === me.id;
+  const type = msg.type || msg.message_type || 'text';
+  const isMedia = type !== 'text';
+  const label = !mine && isGroup ? `<div class="sender-label">${escapeHtml(senderName(senderId))}</div>` : '';
+  return `${label}<div class="bubble ${mine ? 'out' : 'in'} ${isMedia ? 'media' : ''}">${bubbleInnerHTML(msg)}</div>`;
+}
+
+function renderMessages(messages) {
+  messagesEl.innerHTML = messages.map(bubbleHTML).join('');
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function load() {
+  try {
+    if (isGroup) {
+      const data = await Api.call(`/messages/group/${groupId}`);
+      conversationId = data.conversationId;
+      data.members.forEach((m) => { groupMembersById[m.id] = m; });
+      document.getElementById('otherName').textContent = data.title;
+      document.getElementById('otherAvatar').style.background = data.avatarColor;
+      document.getElementById('otherAvatar').textContent = '👥';
+      renderMessages(data.messages);
+    } else {
+      const data = await Api.call(`/messages/${handle}`);
+      conversationId = data.conversationId;
+      otherUserId = data.other.id;
+      document.getElementById('otherName').textContent = data.other.full_name;
+      document.getElementById('otherAvatar').style.background = data.other.avatar_color;
+      document.getElementById('otherAvatar').innerHTML = Api.avatarInner(data.other.full_name, data.other.avatar_url);
+      renderMessages(data.messages);
+    }
+  } catch (err) {
+    document.getElementById('otherName').textContent = 'Not found';
+  }
+}
+
+async function sendText() {
+  const body = input.value.trim();
+  if (!body) return;
+  input.value = '';
+  try {
+    const path = isGroup ? `/messages/group/${groupId}` : `/messages/${handle}`;
+    const data = await Api.call(path, { method: 'POST', body: { body } });
+    messagesEl.insertAdjacentHTML('beforeend', bubbleHTML(data.message));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+sendBtn.addEventListener('click', sendText);
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+
+input.addEventListener('input', () => {
+  const socket = getSocket();
+  if (!socket) return;
+  if (isGroup) socket.emit('typing', { toConversationId: conversationId });
+  else if (otherUserId) socket.emit('typing', { toUserId: otherUserId });
+});
+
+/* ---------------- Attachments: photo / document ---------------- */
+const attachBtn = document.getElementById('attachBtn');
+const attachMenu = document.getElementById('attachMenu');
+const photoInput = document.getElementById('photoInput');
+const docInput = document.getElementById('docInput');
+const previewOverlay = document.getElementById('previewOverlay');
+const previewBody = document.getElementById('previewBody');
+const previewSendBtn = document.getElementById('previewSendBtn');
+
+attachBtn.addEventListener('click', () => attachMenu.classList.toggle('hidden'));
+document.getElementById('attachPhotoBtn').addEventListener('click', () => { attachMenu.classList.add('hidden'); photoInput.click(); });
+document.getElementById('attachDocBtn').addEventListener('click', () => { attachMenu.classList.add('hidden'); docInput.click(); });
+
+function openPreview(file, kind) {
+  pendingFile = file;
+  pendingKind = kind;
+  document.getElementById('previewName').textContent = document.getElementById('otherName').textContent;
+  document.getElementById('previewAvatar').style.background = document.getElementById('otherAvatar').style.background;
+  document.getElementById('previewAvatar').innerHTML = document.getElementById('otherAvatar').innerHTML;
+
+  const url = URL.createObjectURL(file);
+  if (kind === 'image') {
+    previewBody.innerHTML = `<img src="${url}" alt="">`;
+  } else {
+    previewBody.innerHTML = `<div class="attach-preview-doc"><span class="icon">📄</span><span>${escapeHtml(file.name)}</span></div>`;
+  }
+  previewOverlay.classList.remove('hidden');
+}
+
+photoInput.addEventListener('change', () => { if (photoInput.files[0]) openPreview(photoInput.files[0], 'image'); });
+docInput.addEventListener('change', () => { if (docInput.files[0]) openPreview(docInput.files[0], 'file'); });
+
+function closePreview() {
+  previewOverlay.classList.add('hidden');
+  pendingFile = null; pendingKind = null;
+  photoInput.value = ''; docInput.value = '';
+}
+previewOverlay.addEventListener('click', (e) => { if (e.target === previewOverlay) closePreview(); });
+
+previewSendBtn.addEventListener('click', async () => {
+  if (!pendingFile || !conversationId) return;
+  previewSendBtn.disabled = true;
+  previewSendBtn.textContent = 'Sending…';
+  try {
+    const formData = new FormData();
+    formData.append('file', pendingFile);
+    formData.append('type', pendingKind);
+    const data = await Api.call(`/messages/conversation/${conversationId}/media`, { method: 'POST', body: formData, isForm: true });
+    messagesEl.insertAdjacentHTML('beforeend', bubbleHTML(data.message));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    closePreview();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    previewSendBtn.disabled = false;
+    previewSendBtn.textContent = 'Send';
+  }
+});
+
+/* ---------------- Voice notes: press-and-hold to record ---------------- */
+const micBtn = document.getElementById('micBtn');
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordStart = 0;
+
+async function startRecording() {
+  if (!navigator.mediaDevices?.getUserMedia) return alert('Voice notes aren\u2019t supported in this browser.');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const durationSec = Math.max(1, Math.round((Date.now() - recordStart) / 1000));
+      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+      if (blob.size < 500) return; // accidental tap, no real audio
+      await sendVoiceNote(blob, durationSec);
+    };
+    mediaRecorder.start();
+    recordStart = Date.now();
+    micBtn.classList.add('recording');
+    micBtn.textContent = '⏺';
+  } catch (err) {
+    alert('Couldn\u2019t access the microphone.');
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  micBtn.classList.remove('recording');
+  micBtn.textContent = '🎤';
+}
+
+async function sendVoiceNote(blob, durationSec) {
+  if (!conversationId) return;
+  try {
+    const formData = new FormData();
+    formData.append('file', blob, 'voice-note.webm');
+    formData.append('type', 'voice');
+    formData.append('duration', durationSec);
+    const data = await Api.call(`/messages/conversation/${conversationId}/media`, { method: 'POST', body: formData, isForm: true });
+    messagesEl.insertAdjacentHTML('beforeend', bubbleHTML(data.message));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+micBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startRecording(); });
+micBtn.addEventListener('pointerup', stopRecording);
+micBtn.addEventListener('pointerleave', () => { if (mediaRecorder?.state === 'recording') stopRecording(); });
+
+load().then(() => {
+  const socket = getSocket();
+  if (!socket) return;
+  socket.on('message:new', (msg) => {
+    if (msg.conversationId !== conversationId) return;
+    if ((msg.senderId ?? msg.sender_id) === me.id) return; // we already rendered our own on send
+    if (isGroup && !groupMembersById[msg.senderId]) return; // safety: unknown sender
+    messagesEl.insertAdjacentHTML('beforeend', bubbleHTML(msg));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
+  socket.on('typing', ({ fromUserId, conversationId: fromConvo }) => {
+    if (isGroup) { if (fromConvo !== conversationId) return; }
+    else if (fromUserId !== otherUserId) return;
+    typingStatus.innerHTML = '<div class="typing-indicator" style="display:inline-flex;padding:2px 8px;"><span></span><span></span><span></span></div>';
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => { typingStatus.innerHTML = ''; }, 2000);
+  });
+});
+</script>
+</body>
+</html>

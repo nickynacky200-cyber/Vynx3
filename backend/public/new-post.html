@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New post — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell">
+  <div class="post-header">
+    <a href="feed.html" class="cancel">Cancel</a>
+    <span class="title">New post</span>
+    <button class="share" id="shareBtn" disabled>Share</button>
+  </div>
+
+  <div id="alertBox" style="margin:0 18px;"></div>
+
+  <a href="capture.html" class="btn btn-secondary btn-block" style="margin:0 18px 14px; width:calc(100% - 36px);">📸 Use camera (filters, text, speed)</a>
+
+  <label class="upload-drop" id="dropZone">
+    <span class="hint" id="dropHint">Tap to choose a photo or short video</span>
+    <input type="file" id="fileInput" accept="image/*,video/*" style="display:none;">
+  </label>
+
+  <div class="caption-field">
+    <textarea id="caption" rows="3" placeholder="Write a caption…"></textarea>
+  </div>
+
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('post');
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const dropHint = document.getElementById('dropHint');
+const shareBtn = document.getElementById('shareBtn');
+let selectedFile = null;
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  selectedFile = file;
+  shareBtn.disabled = false;
+
+  const url = URL.createObjectURL(file);
+  dropHint.remove();
+  const existingMedia = dropZone.querySelector('img, video');
+  if (existingMedia) existingMedia.remove();
+
+  if (file.type.startsWith('video')) {
+    const video = document.createElement('video');
+    video.src = url; video.muted = true; video.autoplay = true; video.loop = true; video.playsInline = true;
+    dropZone.prepend(video);
+  } else {
+    const img = document.createElement('img');
+    img.src = url;
+    dropZone.prepend(img);
+  }
+});
+
+shareBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  const alertBox = document.getElementById('alertBox');
+  alertBox.innerHTML = '';
+  shareBtn.disabled = true;
+  shareBtn.textContent = 'Sharing…';
+
+  const formData = new FormData();
+  formData.append('media', selectedFile);
+  formData.append('caption', document.getElementById('caption').value.trim());
+
+  try {
+    await Api.call('/posts', { method: 'POST', body: formData, isForm: true });
+    window.location.href = `profile.html?handle=${Api.user().handle}`;
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    shareBtn.disabled = false;
+    shareBtn.textContent = 'Share';
+  }
+});
+</script>
+</body>
+</html>

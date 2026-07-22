@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notifications — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell">
+  <div class="convo-header">
+    <a href="#" class="back" onclick="history.back(); return false;">‹</a>
+    <div class="name">Notifications</div>
+  </div>
+  <div id="notifList" style="flex:1; overflow-y:auto;"><div class="empty-state">Loading…</div></div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('profile');
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function notifText(n) {
+  if (n.type === 'follow') return `<b>${escapeHtml(n.actor.fullName)}</b> started following you`;
+  if (n.type === 'like') return `<b>${escapeHtml(n.actor.fullName)}</b> liked your post`;
+  return `<b>${escapeHtml(n.actor.fullName)}</b> commented on your post`;
+}
+
+async function load() {
+  const list = document.getElementById('notifList');
+  try {
+    const data = await Api.call('/notifications');
+    if (!data.notifications.length) {
+      list.innerHTML = '<div class="empty-state">No notifications yet. When someone follows you or likes a post, you\u2019ll see it here.</div>';
+      return;
+    }
+    list.innerHTML = data.notifications.map((n) => `
+      <div class="notif-row ${n.isRead ? '' : 'unread'}">
+        <a href="profile.html?handle=${n.actor.handle}" class="avatar" style="width:42px;height:42px;font-size:0.75rem;background:${n.actor.avatarColor};">${Api.avatarInner(n.actor.fullName, n.actor.avatarUrl)}</a>
+        <div style="flex:1; min-width:0;">
+          <div class="notif-text">${notifText(n)}</div>
+          <div class="notif-time">${Api.timeAgo(n.createdAt)}</div>
+        </div>
+        ${n.type === 'follow' && !n.amFollowingActor ? `<button class="btn btn-primary notif-followback" data-handle="${n.actor.handle}">Follow back</button>` : ''}
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.notif-followback').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await Api.call(`/users/${btn.dataset.handle}/follow`, { method: 'POST' });
+          btn.textContent = 'Following';
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-secondary');
+        } catch (err) {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    Api.call('/notifications/read-all', { method: 'POST' }).catch(() => {});
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">Could not load notifications.</div>';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

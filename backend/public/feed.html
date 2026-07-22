@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>For You — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell">
+  <div class="feed-page">
+    <div class="feed-topbar">For You<a href="search.html" class="feed-search-link" id="feedSearchLink"></a></div>
+    <div class="feed-scroller" id="feedScroller"></div>
+  </div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('feed');
+document.getElementById('feedSearchLink').innerHTML = Icon.svg('search', 18);
+
+const scroller = document.getElementById('feedScroller');
+let cursorBefore = new Date().toISOString();
+let loading = false;
+let reachedEnd = false;
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function cardHTML(post) {
+  const media = post.media_type === 'video'
+    ? `<video class="media-bg" src="${post.media_url}" muted loop playsinline data-rate="${post.playback_rate || 1}"></video>`
+    : `<img class="media-bg" src="${post.media_url}" alt="">`;
+  return `
+    <div class="feed-card" data-post-id="${post.id}" data-handle="${post.handle}" data-media-url="${post.media_url}" data-caption="${escapeHtml(post.caption || '')}">
+      ${media}
+      <div class="scrim"></div>
+      <div class="caption-block">
+        <a href="profile.html?handle=${post.handle}" class="handle">@${post.handle}</a>
+        <div class="caption">${escapeHtml(post.caption || '')}</div>
+      </div>
+      <div class="feed-rail">
+        <div class="rail-item rail-avatar-wrap">
+          <a href="profile.html?handle=${post.handle}">
+            <div class="avatar" style="width:34px;height:34px;font-size:0.6rem;background:${post.avatar_color};">${Api.avatarInner(post.full_name, post.avatar_url)}</div>
+          </a>
+          ${!post.isOwnPost ? `<button class="rail-follow-plus follow-plus-btn ${post.isFollowingCreator ? 'is-following' : ''}" data-handle="${post.handle}" data-following="${post.isFollowingCreator}" aria-label="Follow">${Icon.svg('plusCircle', 12)}</button>` : ''}
+        </div>
+        <button class="rail-item like-btn" data-liked="${post.likedByMe}">
+          <div class="rail-icon ${post.likedByMe ? 'liked' : ''}">${Icon.svg(post.likedByMe ? 'heartFilled' : 'heart', 17)}</div>
+          <div class="rail-count">${post.likeCount}</div>
+        </button>
+        <button class="rail-item comment-btn">
+          <div class="rail-icon">${Icon.svg('comment', 17)}</div>
+          <div class="rail-count">${post.commentCount}</div>
+        </button>
+        <button class="rail-item share-btn">
+          <div class="rail-icon">${Icon.svg('share', 17)}</div>
+          <div class="rail-count">Share</div>
+        </button>
+        <button class="rail-item download-btn">
+          <div class="rail-icon">${Icon.svg('download', 17)}</div>
+          <div class="rail-count">Save</div>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function loadMore() {
+  if (loading || reachedEnd) return;
+  loading = true;
+  try {
+    const data = await Api.call(`/posts/feed?before=${encodeURIComponent(cursorBefore)}&limit=10`);
+    if (!data.posts.length) {
+      reachedEnd = true;
+      if (!scroller.children.length) {
+        scroller.innerHTML = '<div class="empty-state">No posts yet. Be the first to share something on Vynx.</div>';
+      }
+      return;
+    }
+    cursorBefore = data.posts[data.posts.length - 1].created_at;
+    scroller.insertAdjacentHTML('beforeend', data.posts.map(cardHTML).join(''));
+    attachHandlers();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    loading = false;
+  }
+}
+
+function attachHandlers() {
+  scroller.querySelectorAll('.like-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.feed-card');
+      const postId = card.dataset.postId;
+      const liked = btn.dataset.liked === 'true';
+      const icon = btn.querySelector('.rail-icon');
+      const countEl = btn.querySelector('.rail-count');
+      try {
+        const data = await Api.call(`/posts/${postId}/${liked ? 'unlike' : 'like'}`, { method: 'POST' });
+        btn.dataset.liked = String(data.liked);
+        icon.classList.toggle('liked', data.liked);
+        icon.innerHTML = Icon.svg(data.liked ? 'heartFilled' : 'heart', 17);
+        countEl.textContent = data.likeCount;
+      } catch (err) { console.error(err); }
+    });
+  });
+
+  scroller.querySelectorAll('.follow-plus-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const following = btn.dataset.following === 'true';
+      try {
+        const data = await Api.call(`/users/${btn.dataset.handle}/${following ? 'unfollow' : 'follow'}`, { method: 'POST' });
+        btn.dataset.following = String(data.following);
+        btn.classList.toggle('is-following', data.following);
+      } catch (err) { console.error(err); }
+    });
+  });
+
+  scroller.querySelectorAll('.comment-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => openComments(btn.closest('.feed-card')));
+  });
+
+  scroller.querySelectorAll('.share-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => sharePost(btn.closest('.feed-card')));
+  });
+
+  scroller.querySelectorAll('.download-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => downloadPost(btn.closest('.feed-card')));
+  });
+}
+
+async function sharePost(card) {
+  const url = new URL(card.dataset.mediaUrl, window.location.origin).href;
+  const shareData = { title: 'Vynx', text: `@${card.dataset.handle} on Vynx: ${card.dataset.caption || ''}`.trim(), url };
+  if (navigator.share) {
+    try { await navigator.share(shareData); } catch (err) { /* user cancelled — fine */ }
+  } else {
+    try {
+      await navigator.clipboard.writeText(url);
+      alert('Link copied to clipboard');
+    } catch (err) {
+      prompt('Copy this link:', url);
+    }
+  }
+}
+
+function downloadPost(card) {
+  const url = card.dataset.mediaUrl;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = url.split('/').pop() || 'vynx-post';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+let activeSheet = null;
+async function openComments(card) {
+  closeComments();
+  const postId = card.dataset.postId;
+
+  const sheet = document.createElement('div');
+  sheet.className = 'comments-sheet';
+  sheet.innerHTML = `
+    <div class="comments-sheet-panel">
+      <div class="comments-sheet-header">
+        <span>Comments</span>
+        <button id="closeCommentsBtn">${Icon.svg('x', 18)}</button>
+      </div>
+      <div class="comments-sheet-list" id="commentsList"><div class="empty-state">Loading…</div></div>
+      <div class="comments-sheet-footer">
+        <input type="text" id="commentInput" placeholder="Add a comment…" maxlength="300">
+        <button id="commentSendBtn">${Icon.svg('send', 16)}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(sheet);
+  activeSheet = sheet;
+
+  sheet.addEventListener('click', (e) => { if (e.target === sheet) closeComments(); });
+  sheet.querySelector('#closeCommentsBtn').addEventListener('click', closeComments);
+
+  const list = sheet.querySelector('#commentsList');
+  try {
+    const data = await Api.call(`/posts/${postId}/comments`);
+    if (!data.comments.length) {
+      list.innerHTML = '<div class="empty-state">No comments yet. Be the first.</div>';
+    } else {
+      list.innerHTML = data.comments.map((c) => `
+        <div class="comment-row">
+          ${Api.avatarHTML(32, { fullName: c.full_name, avatarColor: c.avatar_color, avatarUrl: c.avatar_url })}
+          <div>
+            <div class="body-text"><b>@${c.handle}</b> ${escapeHtml(c.body)}</div>
+            <div class="meta">${Api.timeAgo(c.created_at)}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">Could not load comments.</div>';
+  }
+
+  const input = sheet.querySelector('#commentInput');
+  const send = async () => {
+    const body = input.value.trim();
+    if (!body) return;
+    input.disabled = true;
+    try {
+      await Api.call(`/posts/${postId}/comments`, { method: 'POST', body: { body } });
+      input.value = '';
+      const countEl = card.querySelector('.comment-btn .rail-count');
+      countEl.textContent = Number(countEl.textContent) + 1;
+      openComments(card); // refresh list
+    } catch (err) {
+      console.error(err);
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  };
+  sheet.querySelector('#commentSendBtn').addEventListener('click', send);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+}
+
+function closeComments() {
+  activeSheet?.remove();
+  activeSheet = null;
+}
+
+// Play the video that's currently in view; pause the rest.
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    const video = entry.target.querySelector('video');
+    if (!video) return;
+    if (entry.isIntersecting) {
+      video.playbackRate = Number(video.dataset.rate) || 1;
+      video.play().catch(() => {});
+    } else video.pause();
+  });
+}, { root: scroller, threshold: 0.6 });
+
+const mutationObserver = new MutationObserver(() => {
+  scroller.querySelectorAll('.feed-card').forEach((card) => observer.observe(card));
+});
+mutationObserver.observe(scroller, { childList: true });
+
+scroller.addEventListener('scroll', () => {
+  if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 800) loadMore();
+});
+
+loadMore();
+</script>
+</body>
+</html>

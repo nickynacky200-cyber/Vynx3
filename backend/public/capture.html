@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell">
+  <div class="capture-shell" id="stage">
+    <div class="capture-stage" id="captureStage">
+      <video id="liveVideo" autoplay muted playsinline></video>
+    </div>
+    <div class="capture-overlay-layer" id="overlayLayer"></div>
+
+    <div class="text-mode-composer hidden" id="textModeComposer">
+      <textarea id="textModeInput" placeholder="Type something…" maxlength="220"></textarea>
+    </div>
+
+    <div class="capture-topbar">
+      <button id="closeBtn" aria-label="Close"></button>
+    </div>
+
+    <!-- Right-side tool rail, same idea as the reference: flip, flash,
+         timer, filters, speed, and a "more" chevron for text/emoji.
+         Filters/timer/speed open as a strip when tapped rather than
+         staying permanently on screen. -->
+    <div class="capture-rail" id="captureRail">
+      <button id="flipBtn" aria-label="Flip camera"></button>
+      <button id="flashBtn" aria-label="Flash"></button>
+      <button id="timerRailBtn" aria-label="Timer"></button>
+      <button id="filterRailBtn" aria-label="Filters"></button>
+      <button id="speedRailBtn" aria-label="Speed"></button>
+      <button id="moreRailBtn" aria-label="More tools"></button>
+    </div>
+
+    <div class="more-panel hidden" id="morePanel">
+      <button id="textToolBtn">Aa Add text</button>
+      <button id="emojiToolBtn">Add emoji</button>
+    </div>
+
+    <div class="filter-strip hidden" id="filterStrip"></div>
+    <div class="timer-strip hidden" id="timerStrip">
+      <button class="timer-chip active" data-timer="0">Timer off</button>
+      <button class="timer-chip" data-timer="3">3s</button>
+      <button class="timer-chip" data-timer="10">10s</button>
+    </div>
+    <div class="speed-strip hidden" id="speedStrip">
+      <button class="speed-chip" data-speed="0.5">0.5x</button>
+      <button class="speed-chip active" data-speed="1">1x</button>
+      <button class="speed-chip" data-speed="2">2x</button>
+    </div>
+    <div class="text-bg-swatches hidden" id="textBgSwatches"></div>
+
+    <div class="mode-toggle" id="modeToggle">
+      <button class="active" data-mode="photo">PHOTO</button>
+      <button data-mode="text">TEXT</button>
+    </div>
+    <div class="duration-strip" id="durationStrip">
+      <button class="speed-chip" data-duration="15">15s</button>
+      <button class="speed-chip active" data-duration="60">60s</button>
+      <button class="speed-chip" data-duration="180">3m</button>
+    </div>
+
+    <div class="capture-controls" id="captureControls">
+      <button class="gallery-pick-btn" id="galleryBtn" aria-label="Choose from gallery"></button>
+      <button class="capture-shutter" id="shutterBtn" aria-label="Hold for video, tap for photo"></button>
+      <div style="width:44px;"></div>
+    </div>
+
+    <div class="emoji-palette hidden" id="emojiPalette"></div>
+    <input type="file" id="galleryInput" accept="image/*,video/*" class="hidden">
+  </div>
+
+  <!-- Caption + post sheet, shown after a photo/video is captured -->
+  <div class="capture-caption-sheet hidden" id="captionSheet">
+    <div class="post-header">
+      <button class="cancel" id="retakeBtn">Retake</button>
+      <span class="title">New clip</span>
+      <button class="share" id="postBtn">Share</button>
+    </div>
+    <div class="preview-media" id="finalPreview"></div>
+    <div class="caption-field" style="margin:12px 18px;">
+      <textarea id="captionText" rows="2" placeholder="Write a caption…"></textarea>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+
+const stage = document.getElementById('captureStage');
+const liveVideo = document.getElementById('liveVideo');
+const overlayLayer = document.getElementById('overlayLayer');
+const shutterBtn = document.getElementById('shutterBtn');
+
+const FILTERS = [
+  { name: 'Normal', css: 'none' },
+  { name: 'Vivid', css: 'saturate(1.5) contrast(1.1)' },
+  { name: 'Mono', css: 'grayscale(1)' },
+  { name: 'Warm', css: 'sepia(0.3) saturate(1.3)' },
+  { name: 'Cool', css: 'hue-rotate(180deg) saturate(1.15)' },
+  { name: 'Vintage', css: 'sepia(0.4) contrast(0.9) brightness(0.9)' },
+];
+let currentFilter = FILTERS[0].css;
+let currentSpeed = 1;
+let maxDurationMs = 60000;
+let facingMode = 'user';
+let currentStream = null;
+let torchOn = false;
+const overlays = []; // { id, type, content, xPct, yPct, fontSizePct }
+let overlaySeq = 0;
+
+// --- Right-side rail: each icon opens its own popover; opening one closes the rest ---
+const POPOVERS = ['filterStrip', 'timerStrip', 'speedStrip', 'morePanel'];
+function openPopover(id) {
+  POPOVERS.forEach((p) => document.getElementById(p).classList.toggle('hidden', p !== id));
+}
+function closeAllPopovers() {
+  POPOVERS.forEach((p) => document.getElementById(p).classList.add('hidden'));
+}
+
+document.getElementById('filterRailBtn').addEventListener('click', () => openPopover('filterStrip'));
+document.getElementById('timerRailBtn').addEventListener('click', () => openPopover('timerStrip'));
+document.getElementById('speedRailBtn').addEventListener('click', () => openPopover('speedStrip'));
+document.getElementById('moreRailBtn').addEventListener('click', () => openPopover('morePanel'));
+
+document.getElementById('filterRailBtn').innerHTML = Icon.svg('sparkle', 17);
+document.getElementById('timerRailBtn').innerHTML = Icon.svg('clock', 17);
+document.getElementById('speedRailBtn').innerHTML = Icon.svg('play', 15);
+document.getElementById('moreRailBtn').innerHTML = Icon.svg('chevronDown', 17);
+document.getElementById('flashBtn').innerHTML = Icon.svg('bolt', 16);
+document.getElementById('galleryBtn').innerHTML = Icon.svg('image', 20);
+
+document.getElementById('textToolBtn').innerHTML = 'Aa Add text';
+document.getElementById('emojiToolBtn').innerHTML = `${Icon.svg('emoji', 16)} Add emoji`;
+
+document.getElementById('filterStrip').innerHTML = FILTERS.map((f, i) => `<button class="filter-chip ${i === 0 ? 'active' : ''}" data-css="${f.css}">${f.name}</button>`).join('');
+document.querySelectorAll('.filter-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.filter-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentFilter = chip.dataset.css;
+    liveVideo.style.filter = currentFilter;
+    closeAllPopovers();
+  });
+});
+
+document.querySelectorAll('#speedStrip .speed-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#speedStrip .speed-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentSpeed = Number(chip.dataset.speed);
+    closeAllPopovers();
+  });
+});
+
+// TikTok-style recording-length cap — recording auto-stops once this is
+// hit, same idea as their 15s/60s/3min picker.
+document.querySelectorAll('#durationStrip .speed-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#durationStrip .speed-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    maxDurationMs = Number(chip.dataset.duration) * 1000;
+  });
+});
+
+let timerSeconds = 0;
+const timerRailBtn = document.getElementById('timerRailBtn');
+document.querySelectorAll('.timer-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.timer-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    timerSeconds = Number(chip.dataset.timer);
+    timerRailBtn.classList.toggle('active', timerSeconds > 0);
+    timerRailBtn.querySelector('.rail-badge')?.remove();
+    if (timerSeconds > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'rail-badge';
+      badge.textContent = timerSeconds + 's';
+      timerRailBtn.appendChild(badge);
+    }
+    closeAllPopovers();
+  });
+});
+
+// Torch/flash — only works on rear-facing cameras that expose it, and
+// only in browsers that support the (still non-standard) torch
+// constraint. Silently no-ops rather than pretending it worked if the
+// device/browser can't do it.
+const flashBtn = document.getElementById('flashBtn');
+flashBtn.addEventListener('click', async () => {
+  const track = currentStream?.getVideoTracks()[0];
+  const capabilities = track?.getCapabilities?.();
+  if (!capabilities || !('torch' in capabilities)) {
+    flashBtn.style.opacity = '0.4';
+    return;
+  }
+  torchOn = !torchOn;
+  try {
+    await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+    flashBtn.classList.toggle('active', torchOn);
+  } catch {
+    torchOn = false;
+  }
+});
+
+// Self-timer countdown (Snapchat/TikTok style) shown right over the
+// viewfinder before the actual capture/record fires. Returns nothing —
+// just calls `then()` once the countdown finishes.
+function runCountdownThen(then) {
+  if (!timerSeconds) return then();
+  let remaining = timerSeconds;
+  const overlay = document.createElement('div');
+  overlay.className = 'countdown-overlay';
+  overlay.textContent = remaining;
+  stage.appendChild(overlay);
+  const tick = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(tick);
+      overlay.remove();
+      then();
+    } else {
+      overlay.textContent = remaining;
+    }
+  }, 1000);
+}
+
+const EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😜','🤩','🥳','😎','🔥','❤️','👍','🙌','💯','✨','🎉','😢','😮','👏','🙏','💀','😴'];
+const emojiPalette = document.getElementById('emojiPalette');
+emojiPalette.innerHTML = EMOJIS.map((e) => `<button type="button">${e}</button>`).join('');
+emojiPalette.querySelectorAll('button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    addSticker('emoji', btn.textContent, 50, 45, 8);
+    emojiPalette.classList.add('hidden');
+  });
+});
+document.getElementById('emojiToolBtn').addEventListener('click', () => {
+  closeAllPopovers();
+  emojiPalette.classList.toggle('hidden');
+});
+
+document.getElementById('textToolBtn').addEventListener('click', () => {
+  closeAllPopovers();
+  const id = addSticker('text', 'Tap to edit', 50, 35, 6);
+  const el = overlayLayer.querySelector(`[data-id="${id}"]`);
+  el.setAttribute('contenteditable', 'true');
+  el.textContent = '';
+  el.focus();
+  showTextEditToolbar(id, el);
+  el.addEventListener('blur', () => {
+    el.removeAttribute('contenteditable');
+    if (!el.textContent.trim()) removeSticker(id);
+    const o = overlays.find((x) => x.id === id);
+    if (o) o.content = el.textContent;
+    hideTextEditToolbar();
+  }, { once: true });
+});
+
+function showTextEditToolbar(id, el) {
+  hideTextEditToolbar();
+  const o = overlays.find((x) => x.id === id);
+  const toolbar = document.createElement('div');
+  toolbar.className = 'text-edit-toolbar';
+  toolbar.id = 'textEditToolbar';
+  toolbar.innerHTML = `
+    <button class="size-btn" id="sizeDownBtn">A-</button>
+    <div class="style-swatches">
+      <button type="button" class="style-swatch swatch-plain ${o.style === 'plain' ? 'active' : ''}" data-style="plain">A</button>
+      <button type="button" class="style-swatch swatch-white-bg ${o.style === 'white-bg' ? 'active' : ''}" data-style="white-bg"></button>
+      <button type="button" class="style-swatch swatch-black-bg ${o.style === 'black-bg' ? 'active' : ''}" data-style="black-bg"></button>
+      <button type="button" class="style-swatch swatch-highlight ${o.style === 'highlight' ? 'active' : ''}" data-style="highlight"></button>
+    </div>
+    <button class="size-btn" id="sizeUpBtn">A+</button>
+    <button class="done-btn" id="textDoneBtn">Done</button>
+  `;
+  stage.appendChild(toolbar);
+
+  const resize = (delta) => {
+    o.fontSizePct = Math.min(16, Math.max(3, o.fontSizePct + delta));
+    el.style.fontSize = o.fontSizePct + 'vh';
+  };
+  toolbar.querySelector('#sizeDownBtn').addEventListener('click', () => resize(-1));
+  toolbar.querySelector('#sizeUpBtn').addEventListener('click', () => resize(1));
+  toolbar.querySelectorAll('.style-swatch').forEach((swatch) => {
+    swatch.addEventListener('click', () => {
+      toolbar.querySelectorAll('.style-swatch').forEach((s) => s.classList.remove('active'));
+      swatch.classList.add('active');
+      o.style = swatch.dataset.style;
+      el.dataset.style = o.style;
+      el.style.color = o.style === 'plain' ? '#fff' : '';
+    });
+  });
+  toolbar.querySelector('#textDoneBtn').addEventListener('click', () => el.blur());
+}
+
+function hideTextEditToolbar() {
+  document.getElementById('textEditToolbar')?.remove();
+}
+
+function addSticker(type, content, xPct, yPct, fontSizePct, style = 'plain') {
+  const id = ++overlaySeq;
+  overlays.push({ id, type, content, xPct, yPct, fontSizePct, style });
+  const el = document.createElement('div');
+  el.className = 'capture-sticker';
+  el.dataset.id = id;
+  el.dataset.style = style;
+  el.style.left = xPct + '%';
+  el.style.top = yPct + '%';
+  el.style.fontSize = fontSizePct + 'vh';
+  if (style === 'plain') el.style.color = '#fff';
+  el.textContent = content;
+  makeDraggable(el, id);
+  overlayLayer.appendChild(el);
+  return id;
+}
+
+function removeSticker(id) {
+  const idx = overlays.findIndex((o) => o.id === id);
+  if (idx !== -1) overlays.splice(idx, 1);
+  const el = overlayLayer.querySelector(`[data-id="${id}"]`);
+  if (el) el.remove();
+}
+
+// Drag to reposition; double-tap to remove.
+function makeDraggable(el, id) {
+  let dragging = false;
+  let lastTap = 0;
+  el.addEventListener('pointerdown', (e) => {
+    if (el.isContentEditable) return;
+    dragging = true;
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = overlayLayer.getBoundingClientRect();
+    const xPct = Math.min(96, Math.max(4, ((e.clientX - rect.left) / rect.width) * 100));
+    const yPct = Math.min(96, Math.max(4, ((e.clientY - rect.top) / rect.height) * 100));
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+    const o = overlays.find((x) => x.id === id);
+    if (o) { o.xPct = xPct; o.yPct = yPct; }
+  });
+  el.addEventListener('pointerup', () => {
+    dragging = false;
+    const now = Date.now();
+    if (now - lastTap < 300) removeSticker(id);
+    lastTap = now;
+  });
+}
+
+async function startCamera() {
+  if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+  try {
+    currentStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode }, audio: true,
+    });
+    liveVideo.srcObject = currentStream;
+    liveVideo.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+  } catch (err) {
+    alert('Couldn\u2019t access the camera. You can still post from your gallery on the New Post page.');
+    window.location.href = 'new-post.html';
+  }
+}
+
+document.getElementById('closeBtn').innerHTML = Icon.svg('x', 18);
+document.getElementById('flipBtn').innerHTML = Icon.svg('flip', 18);
+document.getElementById('flipBtn').addEventListener('click', () => {
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  startCamera();
+});
+
+document.getElementById('closeBtn').addEventListener('click', () => {
+  if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+  window.location.href = 'feed.html';
+});
+
+/* ---------------- Capture: tap = photo, hold = video ---------------- */
+function coverCrop(videoW, videoH, containerW, containerH) {
+  const videoRatio = videoW / videoH;
+  const containerRatio = containerW / containerH;
+  let sx = 0, sy = 0, sw = videoW, sh = videoH;
+  if (videoRatio > containerRatio) {
+    sw = videoH * containerRatio;
+    sx = (videoW - sw) / 2;
+  } else {
+    sh = videoW / containerRatio;
+    sy = (videoH - sh) / 2;
+  }
+  return { sx, sy, sw, sh };
+}
+
+function buildBakeCanvas() {
+  const rect = stage.getBoundingClientRect();
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = Math.round(720 / (rect.width / rect.height));
+  return canvas;
+}
+
+function drawFrame(ctx, canvas) {
+  const rect = stage.getBoundingClientRect();
+  const { sx, sy, sw, sh } = coverCrop(liveVideo.videoWidth, liveVideo.videoHeight, rect.width, rect.height);
+  ctx.save();
+  ctx.filter = currentFilter;
+  if (facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(liveVideo, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  overlays.forEach((o) => {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const fontPx = Math.round((o.fontSizePct / 100) * canvas.height);
+    ctx.font = `700 ${fontPx}px sans-serif`;
+    const cx = (o.xPct / 100) * canvas.width;
+    const cy = (o.yPct / 100) * canvas.height;
+
+    if (o.type === 'text' && o.style && o.style !== 'plain') {
+      const textWidth = ctx.measureText(o.content).width;
+      const padX = fontPx * 0.35;
+      const padY = fontPx * 0.22;
+      ctx.fillStyle = o.style === 'white-bg' ? '#ffffff' : o.style === 'black-bg' ? 'rgba(0,0,0,0.75)' : '#35f0c8';
+      const boxX = cx - textWidth / 2 - padX;
+      const boxY = cy - fontPx / 2 - padY;
+      const boxW = textWidth + padX * 2;
+      const boxH = fontPx + padY * 2;
+      const r = Math.min(10, boxH / 2);
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(boxX, boxY, boxW, boxH, r) : ctx.rect(boxX, boxY, boxW, boxH);
+      ctx.fill();
+      ctx.fillStyle = o.style === 'white-bg' ? '#0b0c10' : o.style === 'black-bg' ? '#fff' : '#0b0c10';
+    } else {
+      ctx.fillStyle = o.type === 'text' ? '#fff' : '#000';
+      if (o.type === 'text') {
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur = 6;
+      }
+    }
+    ctx.fillText(o.content, cx, cy);
+    ctx.restore();
+  });
+}
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordLoopId = null;
+let recordStopTimer = null;
+let holdTimer = null;
+let isRecording = false;
+let capturedBlob = null;
+let capturedType = null; // 'image' | 'video'
+
+function capturePhoto() {
+  const canvas = buildBakeCanvas();
+  const ctx = canvas.getContext('2d');
+  drawFrame(ctx, canvas);
+  canvas.toBlob((blob) => {
+    capturedBlob = blob;
+    capturedType = 'image';
+    showCaptionSheet(URL.createObjectURL(blob), 'image');
+  }, 'image/jpeg', 0.92);
+}
+
+function startVideoRecording() {
+  const canvas = buildBakeCanvas();
+  const ctx = canvas.getContext('2d');
+  const canvasStream = canvas.captureStream(30);
+  const audioTrack = currentStream.getAudioTracks()[0];
+  if (audioTrack) canvasStream.addTrack(audioTrack);
+
+  recordedChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus' : 'video/webm';
+  mediaRecorder = new MediaRecorder(canvasStream, { mimeType });
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    cancelAnimationFrame(recordLoopId);
+    capturedBlob = new Blob(recordedChunks, { type: 'video/webm' });
+    capturedType = 'video';
+    const url = URL.createObjectURL(capturedBlob);
+    showCaptionSheet(url, 'video');
+  };
+  mediaRecorder.start();
+  isRecording = true;
+  shutterBtn.classList.add('recording');
+  recordStopTimer = setTimeout(() => { if (isRecording) stopVideoRecording(); }, maxDurationMs);
+
+  const loop = () => {
+    drawFrame(ctx, canvas);
+    recordLoopId = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+function stopVideoRecording() {
+  if (recordStopTimer) { clearTimeout(recordStopTimer); recordStopTimer = null; }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  isRecording = false;
+  shutterBtn.classList.remove('recording');
+}
+
+shutterBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (captureMode === 'text') return;
+  holdTimer = setTimeout(() => { startVideoRecording(); }, 280);
+});
+shutterBtn.addEventListener('pointerup', () => {
+  if (captureMode === 'text') { postTextCard(); return; }
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+  if (isRecording) stopVideoRecording();
+  else runCountdownThen(capturePhoto);
+});
+
+function showCaptionSheet(url, type) {
+  document.getElementById('captionSheet').classList.remove('hidden');
+  const preview = document.getElementById('finalPreview');
+  if (type === 'video') {
+    preview.innerHTML = `<video src="${url}" controls autoplay loop playsinline></video>`;
+    preview.querySelector('video').playbackRate = currentSpeed;
+  } else {
+    preview.innerHTML = `<img src="${url}" alt="">`;
+  }
+}
+
+document.getElementById('retakeBtn').addEventListener('click', () => {
+  document.getElementById('captionSheet').classList.add('hidden');
+  document.getElementById('finalPreview').innerHTML = '';
+  document.getElementById('captionText').value = '';
+  capturedBlob = null;
+  capturedType = null;
+});
+
+document.getElementById('postBtn').addEventListener('click', async () => {
+  if (!capturedBlob) return;
+  const btn = document.getElementById('postBtn');
+  btn.disabled = true;
+  btn.textContent = 'Sharing…';
+  try {
+    const formData = new FormData();
+    formData.append('media', capturedBlob, capturedType === 'video' ? 'clip.webm' : 'photo.jpg');
+    formData.append('caption', document.getElementById('captionText').value.trim());
+    if (capturedType === 'video') formData.append('playbackRate', currentSpeed);
+    await Api.call('/posts', { method: 'POST', body: formData, isForm: true });
+    if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+    window.location.href = `profile.html?handle=${Api.user().handle}`;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+    btn.textContent = 'Share';
+  }
+});
+
+/* ---------------- Gallery upload — pick an existing photo/video instead of capturing ---------------- */
+const galleryInput = document.getElementById('galleryInput');
+const galleryBtn = document.getElementById('galleryBtn');
+galleryBtn.addEventListener('click', () => galleryInput.click());
+galleryInput.addEventListener('change', () => {
+  const file = galleryInput.files[0];
+  if (!file) return;
+  capturedBlob = file;
+  capturedType = file.type.startsWith('video') ? 'video' : 'image';
+  // Swap the gallery button's icon for a thumbnail of what was picked,
+  // same as TikTok showing your last camera-roll item there.
+  const url = URL.createObjectURL(file);
+  if (capturedType === 'image') {
+    galleryBtn.innerHTML = `<img src="${url}" alt="">`;
+  }
+  showCaptionSheet(url, capturedType);
+});
+
+/* ---------------- PHOTO / TEXT mode toggle ---------------- */
+const textModeComposer = document.getElementById('textModeComposer');
+const textModeInput = document.getElementById('textModeInput');
+const textBgSwatches = document.getElementById('textBgSwatches');
+const TEXT_BACKGROUNDS = ['#0b0c10', '#35f0c8', '#ff3b79', '#5b6bff', '#e8a33d'];
+let textBg = TEXT_BACKGROUNDS[0];
+
+textBgSwatches.innerHTML = TEXT_BACKGROUNDS.map((c, i) =>
+  `<button type="button" class="text-bg-swatch ${i === 0 ? 'active' : ''}" data-bg="${c}" style="background:${c};"></button>`
+).join('');
+textBgSwatches.querySelectorAll('.text-bg-swatch').forEach((sw) => {
+  sw.addEventListener('click', () => {
+    textBgSwatches.querySelectorAll('.text-bg-swatch').forEach((s) => s.classList.remove('active'));
+    sw.classList.add('active');
+    textBg = sw.dataset.bg;
+    textModeComposer.style.background = textBg;
+  });
+});
+
+let captureMode = 'photo';
+document.querySelectorAll('#modeToggle button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#modeToggle button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    captureMode = btn.dataset.mode;
+    closeAllPopovers();
+
+    const isText = captureMode === 'text';
+    textModeComposer.classList.toggle('hidden', !isText);
+    textModeComposer.style.background = isText ? textBg : '';
+    document.getElementById('captureRail').classList.toggle('hidden', isText);
+    textBgSwatches.classList.toggle('hidden', !isText);
+    galleryBtn.classList.toggle('hidden', isText);
+    document.getElementById('durationStrip').classList.toggle('hidden', isText);
+    if (isText) textModeInput.focus();
+  });
+});
+
+// In TEXT mode, the shutter renders the background+text as an image post
+// instead of capturing from the camera.
+function postTextCard() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = 1280;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = textBg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = textBg === '#0b0c10' ? '#fff' : '#0b0c10';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 56px sans-serif';
+
+  // Basic word-wrap so long text doesn't run off the canvas.
+  const words = (textModeInput.value.trim() || 'Say something…').split(/\s+/);
+  const lines = [];
+  let line = '';
+  words.forEach((w) => {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width > canvas.width - 120) {
+      lines.push(line);
+      line = w;
+    } else line = test;
+  });
+  if (line) lines.push(line);
+
+  const lineHeight = 68;
+  const startY = canvas.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((l, i) => ctx.fillText(l, canvas.width / 2, startY + i * lineHeight));
+
+  canvas.toBlob((blob) => {
+    capturedBlob = blob;
+    capturedType = 'image';
+    showCaptionSheet(URL.createObjectURL(blob), 'image');
+  }, 'image/jpeg', 0.92);
+}
+
+startCamera();
+</script>
+</body>
+</html>
