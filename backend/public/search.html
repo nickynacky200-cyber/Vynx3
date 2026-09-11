@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vynx">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+<div class="app-shell">
+  <div class="convo-header">
+    <a href="#" class="back" onclick="history.back(); return false;" id="backBtn"></a>
+    <input type="text" id="searchInput" placeholder="Search people by name or @handle" autofocus
+           style="flex:1; background:none; border:none; color:var(--bone); font-size:0.95rem; font-family:var(--font-body);">
+  </div>
+  <div id="results" style="flex:1; overflow-y:auto;"><div class="empty-state">Start typing to find people on Vynx.</div></div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/pwa.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('chats');
+document.getElementById('backBtn').innerHTML = Icon.svg('back', 20);
+
+const input = document.getElementById('searchInput');
+const results = document.getElementById('results');
+let debounceTimer = null;
+
+function render(users) {
+  if (!users.length) {
+    results.innerHTML = '<div class="empty-state">No one matches that search.</div>';
+    return;
+  }
+  results.innerHTML = users.map((u) => `
+    <div class="people-row">
+      <a href="profile.html?handle=${u.handle}" style="display:flex; align-items:center; gap:12px; flex:1; text-decoration:none; color:inherit;">
+        ${Api.avatarHTML(42, { fullName: u.fullName, avatarColor: u.avatarColor, avatarUrl: u.avatarUrl })}
+        <div>
+          <div class="name">${u.fullName}</div>
+          <div class="handle">@${u.handle}</div>
+        </div>
+      </a>
+      <button class="btn ${u.isFollowing ? 'btn-secondary' : 'btn-primary'} search-follow-btn" data-handle="${u.handle}" style="padding:7px 14px; font-size:0.75rem;">
+        ${u.isFollowing ? 'Following' : 'Follow'}
+      </button>
+    </div>
+  `).join('');
+
+  results.querySelectorAll('.search-follow-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const following = btn.textContent.trim() === 'Following';
+      btn.disabled = true;
+      try {
+        const data = await Api.call(`/users/${btn.dataset.handle}/${following ? 'unfollow' : 'follow'}`, { method: 'POST' });
+        btn.textContent = data.following ? 'Following' : 'Follow';
+        btn.className = `btn ${data.following ? 'btn-secondary' : 'btn-primary'} search-follow-btn`;
+      } catch (err) { console.error(err); }
+      btn.disabled = false;
+    });
+  });
+}
+
+input.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  const q = input.value.trim();
+  if (!q) {
+    results.innerHTML = '<div class="empty-state">Start typing to find people on Vynx.</div>';
+    return;
+  }
+  debounceTimer = setTimeout(async () => {
+    try {
+      const data = await Api.call(`/users/search?q=${encodeURIComponent(q)}`);
+      render(data.users);
+    } catch (err) {
+      results.innerHTML = '<div class="empty-state">Search failed. Try again.</div>';
+    }
+  }, 300);
+});
+</script>
+</body>
+</html>
