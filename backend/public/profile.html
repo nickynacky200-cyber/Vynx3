@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Profile — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="acct-header">
+    <span class="mono muted" id="handleTop">@…</span>
+    <div class="header-actions">
+      <a href="notifications.html" class="icon-btn hidden" id="bellLink" aria-label="Notifications">
+        🔔<span class="badge hidden" id="notifBadge"></span>
+      </a>
+      <a href="#" id="logoutLink" class="muted hidden">Log out</a>
+    </div>
+  </div>
+
+  <div class="acct-top">
+    <div class="avatar-edit-wrap" id="avatarWrap">
+      <div class="avatar-lg" id="avatarLg"></div>
+      <div class="avatar-edit-badge hidden" id="avatarEditBadge">✎</div>
+    </div>
+    <input type="file" id="avatarInput" accept="image/*" style="display:none;">
+    <div class="name" id="fullName">…</div>
+    <div class="handle" id="handleSub"></div>
+    <div class="bio" id="bio"></div>
+
+    <div class="stat-row">
+      <a class="stat" id="followingStat" href="#"><span class="num" id="followingCount">0</span><span class="lbl">Following</span></a>
+      <a class="stat" id="followersStat" href="#"><span class="num" id="followersCount">0</span><span class="lbl">Followers</span></a>
+      <div class="stat"><span class="num" id="likesCount">0</span><span class="lbl">Likes</span></div>
+    </div>
+
+    <div class="acct-actions" id="actionsRow"></div>
+  </div>
+
+  <div class="acct-tabs">
+    <button class="tab active">Clips</button>
+  </div>
+  <div class="grid3" id="postGrid" style="flex:1; overflow-y:auto;"></div>
+
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('profile');
+
+const params = new URLSearchParams(window.location.search);
+const handle = params.get('handle') || Api.user()?.handle;
+
+async function loadNotifBadge() {
+  try {
+    const data = await Api.call('/notifications');
+    const badge = document.getElementById('notifBadge');
+    if (data.unreadCount > 0) {
+      badge.textContent = data.unreadCount > 9 ? '9+' : data.unreadCount;
+      badge.classList.remove('hidden');
+    }
+  } catch (err) { /* non-critical */ }
+}
+
+async function load() {
+  try {
+    const data = await Api.call(`/users/${handle}`);
+    document.getElementById('handleTop').textContent = `@${data.user.handle}`;
+    document.getElementById('avatarLg').innerHTML = Api.avatarInner(data.user.fullName, data.user.avatarUrl);
+    document.getElementById('avatarLg').style.background = data.user.avatarColor;
+    document.getElementById('fullName').textContent = data.user.fullName;
+    document.getElementById('handleSub').textContent = `@${data.user.handle}`;
+    document.getElementById('bio').textContent = data.user.bio || '';
+    document.getElementById('followingCount').textContent = data.stats.following;
+    document.getElementById('followersCount').textContent = data.stats.followers;
+    document.getElementById('likesCount').textContent = data.stats.totalLikes;
+    document.getElementById('followingStat').href = `people.html?handle=${handle}&type=following`;
+    document.getElementById('followersStat').href = `people.html?handle=${handle}&type=followers`;
+
+    const actions = document.getElementById('actionsRow');
+    if (data.isSelf) {
+      document.getElementById('logoutLink').classList.remove('hidden');
+      document.getElementById('logoutLink').addEventListener('click', (e) => { e.preventDefault(); Api.logout(); });
+      document.getElementById('bellLink').classList.remove('hidden');
+      document.getElementById('avatarEditBadge').classList.remove('hidden');
+      document.getElementById('avatarWrap').addEventListener('click', () => document.getElementById('avatarInput').click());
+      actions.innerHTML = `<a href="new-post.html" class="btn btn-primary">Share a post</a>`;
+      loadNotifBadge();
+    } else {
+      actions.innerHTML = `
+        <button class="btn ${data.isFollowing ? 'btn-secondary' : 'btn-primary'}" id="followBtn">${data.isFollowing ? 'Following' : 'Follow'}</button>
+        <a class="btn btn-secondary" href="chat.html?handle=${data.user.handle}">Message</a>
+      `;
+      document.getElementById('followBtn').dataset.following = data.isFollowing;
+      document.getElementById('followBtn').addEventListener('click', toggleFollow);
+    }
+
+    const grid = document.getElementById('postGrid');
+    if (!data.posts.length) {
+      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">No posts yet.</div>';
+    } else {
+      grid.innerHTML = data.posts.map((p) => {
+        const bg = p.media_type === 'video'
+          ? `background-image:linear-gradient(150deg,#1a1030,#2b1140);`
+          : `background-image:url('${p.media_url}');`;
+        return `<div class="cell" style="${bg}"><span class="plays">${p.media_type === 'video' ? '▶' : '♥'} ${p.likeCount}</span></div>`;
+      }).join('');
+    }
+  } catch (err) {
+    document.getElementById('fullName').textContent = 'Account not found';
+  }
+}
+
+document.getElementById('avatarInput').addEventListener('change', async () => {
+  const file = document.getElementById('avatarInput').files[0];
+  if (!file) return;
+  const avatarLg = document.getElementById('avatarLg');
+  const previousHTML = avatarLg.innerHTML;
+  avatarLg.innerHTML = `<img src="${URL.createObjectURL(file)}" alt="">`;
+  try {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    const data = await Api.call('/users/me/avatar', { method: 'POST', body: formData, isForm: true });
+    const profile = Api.user();
+    if (profile) { profile.avatarUrl = data.avatarUrl; Api.setProfile(profile); }
+  } catch (err) {
+    avatarLg.innerHTML = previousHTML;
+    alert(err.message);
+  }
+});
+
+async function toggleFollow() {
+  const btn = document.getElementById('followBtn');
+  const following = btn.dataset.following === 'true';
+  btn.disabled = true;
+  try {
+    const data = await Api.call(`/users/${handle}/${following ? 'unfollow' : 'follow'}`, { method: 'POST' });
+    btn.dataset.following = data.following;
+    btn.textContent = data.following ? 'Following' : 'Follow';
+    btn.className = `btn ${data.following ? 'btn-secondary' : 'btn-primary'}`;
+    document.getElementById('followersCount').textContent = data.stats.followers;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

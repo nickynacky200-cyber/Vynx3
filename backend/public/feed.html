@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>For You — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="feed-page">
+    <div class="feed-topbar">For You</div>
+    <div class="feed-scroller" id="feedScroller"></div>
+  </div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('feed');
+
+const scroller = document.getElementById('feedScroller');
+let cursorBefore = new Date().toISOString();
+let loading = false;
+let reachedEnd = false;
+
+function cardHTML(post) {
+  const media = post.media_type === 'video'
+    ? `<video class="media-bg" src="${post.media_url}" muted loop playsinline data-rate="${post.playback_rate || 1}"></video>`
+    : `<img class="media-bg" src="${post.media_url}" alt="">`;
+  return `
+    <div class="feed-card" data-post-id="${post.id}">
+      ${media}
+      <div class="scrim"></div>
+      <div class="caption-block">
+        <a href="profile.html?handle=${post.handle}" class="handle">@${post.handle}</a>
+        <div class="caption">${escapeHtml(post.caption || '')}</div>
+      </div>
+      <div class="feed-rail">
+        <a href="profile.html?handle=${post.handle}" class="rail-item">
+          <div class="avatar" style="width:34px;height:34px;font-size:0.6rem;background:${post.avatar_color};">${Api.avatarInner(post.full_name, post.avatar_url)}</div>
+        </a>
+        <button class="rail-item like-btn" data-liked="${post.likedByMe}">
+          <div class="rail-icon ${post.likedByMe ? 'liked' : ''}">♥</div>
+          <div class="rail-count">${post.likeCount}</div>
+        </button>
+        <button class="rail-item">
+          <div class="rail-icon">💬</div>
+          <div class="rail-count">${post.commentCount}</div>
+        </button>
+        <button class="rail-item">
+          <div class="rail-icon">↗</div>
+          <div class="rail-count">Send</div>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function loadMore() {
+  if (loading || reachedEnd) return;
+  loading = true;
+  try {
+    const data = await Api.call(`/posts/feed?before=${encodeURIComponent(cursorBefore)}&limit=10`);
+    if (!data.posts.length) {
+      reachedEnd = true;
+      if (!scroller.children.length) {
+        scroller.innerHTML = '<div class="empty-state">No posts yet. Be the first to share something on Vynx.</div>';
+      }
+      return;
+    }
+    cursorBefore = data.posts[data.posts.length - 1].created_at;
+    scroller.insertAdjacentHTML('beforeend', data.posts.map(cardHTML).join(''));
+    attachHandlers();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    loading = false;
+  }
+}
+
+function attachHandlers() {
+  scroller.querySelectorAll('.like-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.feed-card');
+      const postId = card.dataset.postId;
+      const liked = btn.dataset.liked === 'true';
+      const icon = btn.querySelector('.rail-icon');
+      const countEl = btn.querySelector('.rail-count');
+      try {
+        const data = await Api.call(`/posts/${postId}/${liked ? 'unlike' : 'like'}`, { method: 'POST' });
+        btn.dataset.liked = String(data.liked);
+        icon.classList.toggle('liked', data.liked);
+        countEl.textContent = data.likeCount;
+      } catch (err) { console.error(err); }
+    });
+  });
+}
+
+// Play the video that's currently in view; pause the rest.
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    const video = entry.target.querySelector('video');
+    if (!video) return;
+    if (entry.isIntersecting) {
+      video.playbackRate = Number(video.dataset.rate) || 1;
+      video.play().catch(() => {});
+    } else video.pause();
+  });
+}, { root: scroller, threshold: 0.6 });
+
+const mutationObserver = new MutationObserver(() => {
+  scroller.querySelectorAll('.feed-card').forEach((card) => observer.observe(card));
+});
+mutationObserver.observe(scroller, { childList: true });
+
+scroller.addEventListener('scroll', () => {
+  if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 800) loadMore();
+});
+
+loadMore();
+</script>
+</body>
+</html>

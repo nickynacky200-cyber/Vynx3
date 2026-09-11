@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log in — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="auth-wrap">
+    <div class="wordmark">Vynx</div>
+    <div class="tag">Welcome back</div>
+
+    <div id="alertBox"></div>
+
+    <form id="loginForm">
+      <div class="field"><label for="email">Email</label><input id="email" type="email" required autocomplete="email"></div>
+      <div class="field"><label for="password">Password</label><input id="password" type="password" required autocomplete="current-password"></div>
+      <button type="submit" class="btn btn-primary btn-block" id="submitBtn">Log in</button>
+    </form>
+
+    <div class="auth-switch">New here? <a href="register.html">Create an account</a></div>
+  </div>
+</div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+// Friendlier copy for Firebase's error codes than its raw messages.
+function firebaseAuthErrorMessage(err) {
+  switch (err.code) {
+    case 'auth/invalid-email':
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect email or password.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a bit and try again.';
+    case 'auth/network-request-failed':
+      return 'Network error. Check your connection and try again.';
+    default:
+      return err.message || 'Something went wrong. Please try again.';
+  }
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  const alertBox = document.getElementById('alertBox');
+  alertBox.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Logging in…';
+
+  try {
+    await auth.signInWithEmailAndPassword(
+      document.getElementById('email').value.trim(),
+      document.getElementById('password').value
+    );
+    // Pull (or, for accounts that pre-date this profile row, create) the
+    // local profile — handle, bio, avatar color — tied to this Firebase user.
+    const data = await Api.call('/auth/sync', { method: 'POST' });
+    Api.setProfile(data.user);
+    window.location.href = 'feed.html';
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">${firebaseAuthErrorMessage(err)}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Log in';
+  }
+});
+</script>
+</body>
+</html>

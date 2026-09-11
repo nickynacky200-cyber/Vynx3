@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New group — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="post-header">
+    <a href="chats.html" class="cancel">Cancel</a>
+    <span class="title">New group</span>
+    <button class="share" id="createBtn" disabled>Create</button>
+  </div>
+
+  <div id="alertBox" style="margin:0 18px;"></div>
+
+  <div class="group-title-field">
+    <div class="field" style="margin-bottom:0;">
+      <label for="groupTitle">Group name</label>
+      <input type="text" id="groupTitle" maxlength="60" placeholder="e.g. Studio squad">
+    </div>
+  </div>
+
+  <div class="search-bar" style="margin-top:0;">Pick members from people you follow</div>
+  <div class="people-list" id="memberList" style="flex:1; overflow-y:auto;"><div class="empty-state">Loading…</div></div>
+
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('chats');
+
+const titleInput = document.getElementById('groupTitle');
+const createBtn = document.getElementById('createBtn');
+const selected = new Set();
+
+function refreshCreateBtn() {
+  createBtn.disabled = !(titleInput.value.trim() && selected.size > 0);
+}
+titleInput.addEventListener('input', refreshCreateBtn);
+
+async function loadPeople() {
+  const list = document.getElementById('memberList');
+  const me = Api.user();
+  try {
+    const [followingRes, followersRes] = await Promise.all([
+      Api.call(`/users/${me.handle}/following`),
+      Api.call(`/users/${me.handle}/followers`),
+    ]);
+    const seen = new Map();
+    [...followingRes.users, ...followersRes.users].forEach((u) => seen.set(u.handle, u));
+    const people = [...seen.values()];
+
+    if (!people.length) {
+      list.innerHTML = '<div class="empty-state">Follow a few people first \u2014 you\u2019ll be able to add them to groups here.</div>';
+      return;
+    }
+
+    list.innerHTML = people.map((u) => `
+      <label class="member-pick-row">
+        ${Api.avatarHTML(42, { fullName: u.full_name, avatarColor: u.avatar_color, avatarUrl: u.avatar_url })}
+        <div>
+          <div class="name">${u.full_name}</div>
+          <div class="handle">@${u.handle}</div>
+        </div>
+        <input type="checkbox" data-handle="${u.handle}">
+      </label>
+    `).join('');
+
+    list.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+      box.addEventListener('change', () => {
+        if (box.checked) selected.add(box.dataset.handle);
+        else selected.delete(box.dataset.handle);
+        refreshCreateBtn();
+      });
+    });
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">Could not load your people.</div>';
+  }
+}
+
+createBtn.addEventListener('click', async () => {
+  const alertBox = document.getElementById('alertBox');
+  alertBox.innerHTML = '';
+  createBtn.disabled = true;
+  createBtn.textContent = 'Creating…';
+  try {
+    const data = await Api.call('/messages/group', {
+      method: 'POST',
+      body: { title: titleInput.value.trim(), memberHandles: [...selected] },
+    });
+    window.location.href = `chat.html?group=${data.conversationId}`;
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    createBtn.disabled = false;
+    createBtn.textContent = 'Create';
+  }
+});
+
+loadPeople();
+</script>
+</body>
+</html>
