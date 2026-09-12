@@ -149,22 +149,80 @@ const ready = (async () => {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS follow_requests (
+      requester_id INTEGER NOT NULL,
+      target_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (requester_id, target_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS blocks (
+      blocker_id INTEGER NOT NULL,
+      blocked_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (blocker_id, blocked_id)
+    );
+
+    -- Extra media items for a carousel post beyond the first one (which
+    -- still lives on posts.media_url/media_type for backward compat).
+    CREATE TABLE IF NOT EXISTS post_media (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      post_id INTEGER NOT NULL,
+      media_type TEXT NOT NULL,
+      media_url TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS close_friends (
+      owner_id INTEGER NOT NULL,
+      friend_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (owner_id, friend_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS message_reactions (
+      message_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      emoji TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (message_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_reads (
+      conversation_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, user_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
     CREATE INDEX IF NOT EXISTS idx_messages_convo ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_post_media_post ON post_media(post_id, position);
   `);
 
   await ensureColumn('users', 'firebase_uid', 'firebase_uid TEXT UNIQUE');
   await ensureColumn('users', 'avatar_url', 'avatar_url TEXT');
+  await ensureColumn('users', 'is_private', 'is_private INTEGER NOT NULL DEFAULT 0');
+  await ensureColumn('users', 'comment_privacy', "comment_privacy TEXT NOT NULL DEFAULT 'everyone'");
+  await ensureColumn('users', 'message_privacy', "message_privacy TEXT NOT NULL DEFAULT 'everyone'");
+  await ensureColumn('users', 'muted_words', "muted_words TEXT NOT NULL DEFAULT '[]'");
+  await ensureColumn('users', 'profile_theme', 'profile_theme TEXT');
+  await ensureColumn('users', 'pinned_post_id', 'pinned_post_id INTEGER');
   await ensureColumn('posts', 'playback_rate', 'playback_rate REAL NOT NULL DEFAULT 1');
+  await ensureColumn('posts', 'visibility', "visibility TEXT NOT NULL DEFAULT 'public'");
+  await ensureColumn('posts', 'reply_to_post_id', 'reply_to_post_id INTEGER');
   await ensureColumn('conversations', 'is_group', 'is_group INTEGER NOT NULL DEFAULT 0');
   await ensureColumn('conversations', 'title', 'title TEXT');
   await ensureColumn('conversations', 'avatar_color', "avatar_color TEXT DEFAULT '#5b6bff'");
   await ensureColumn('conversations', 'created_by', 'created_by INTEGER');
+  await ensureColumn('conversations', 'disappearing_seconds', 'disappearing_seconds INTEGER');
   await ensureColumn('messages', 'message_type', "message_type TEXT NOT NULL DEFAULT 'text'");
   await ensureColumn('messages', 'media_url', 'media_url TEXT');
   await ensureColumn('messages', 'media_name', 'media_name TEXT');
   await ensureColumn('messages', 'media_duration', 'media_duration INTEGER');
+  await ensureColumn('messages', 'shared_post_id', 'shared_post_id INTEGER');
+  await ensureColumn('messages', 'expires_at', 'expires_at TEXT');
 })();
 
 module.exports = { prepare, ready };
