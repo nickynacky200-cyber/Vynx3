@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chats — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="page-header">
+    <span class="title">Chats</span>
+    <div class="header-actions">
+      <a class="icon-btn" href="notifications.html" id="bellLink">🔔<span class="badge hidden" id="notifBadge">0</span></a>
+      <a class="icon-btn" href="group-new.html" title="New group">➕</a>
+    </div>
+  </div>
+  <div class="search-bar">Search chats</div>
+  <div class="chat-list" id="chatList"><div class="empty-state">Loading…</div></div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('chats');
+
+function initialsColor(str) {
+  const colors = ['#35f0c8', '#ff3b79', '#5b6bff', '#e8a33d', '#35b0f0'];
+  let hash = 0;
+  for (const c of str) hash = c.charCodeAt(0) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function previewFor(lastMessage) {
+  if (!lastMessage) return 'Say hi \u{1F44B}';
+  if (lastMessage.message_type === 'image') return '\u{1F4F7} Photo';
+  if (lastMessage.message_type === 'voice') return '\u{1F3A4} Voice note';
+  if (lastMessage.message_type === 'file') return '\u{1F4CE} Document';
+  return escapeHtml(lastMessage.body || '');
+}
+
+async function loadChats() {
+  const list = document.getElementById('chatList');
+  try {
+    const data = await Api.call('/messages');
+    if (!data.conversations.length) {
+      list.innerHTML = '<div class="empty-state">No conversations yet. Visit someone\u2019s profile and hit Message, or start a group.</div>';
+      return;
+    }
+    list.innerHTML = data.conversations.map((c) => {
+      if (c.isGroup) {
+        return `
+          <a class="chat-item" href="chat.html?group=${c.conversationId}">
+            <div class="avatar avatar-group" style="width:46px;height:46px;font-size:0.85rem;background:${c.avatarColor};">${Api.initials(c.title)}</div>
+            <div class="chat-meta">
+              <div class="name">${escapeHtml(c.title)}<span class="group-tag">${c.memberCount} members</span></div>
+              <div class="preview">${previewFor(c.lastMessage)}</div>
+            </div>
+            <div class="chat-side">${c.lastMessage ? Api.timeAgo(c.lastMessage.created_at) : ''}</div>
+          </a>`;
+      }
+      return `
+        <a class="chat-item" href="chat.html?handle=${c.other.handle}">
+          ${Api.avatarHTML(46, { fullName: c.other.full_name, avatarColor: c.other.avatar_color || initialsColor(c.other.handle), avatarUrl: c.other.avatar_url })}
+          <div class="chat-meta">
+            <div class="name">${c.other.full_name}</div>
+            <div class="preview">${previewFor(c.lastMessage)}</div>
+          </div>
+          <div class="chat-side">${c.lastMessage ? Api.timeAgo(c.lastMessage.created_at) : ''}</div>
+        </a>`;
+    }).join('');
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">Could not load chats.</div>';
+  }
+}
+
+async function loadBadge() {
+  try {
+    const data = await Api.call('/notifications');
+    const badge = document.getElementById('notifBadge');
+    if (data.unreadCount > 0) {
+      badge.textContent = data.unreadCount > 9 ? '9+' : data.unreadCount;
+      badge.classList.remove('hidden');
+    }
+  } catch (err) { /* non-critical */ }
+}
+
+loadChats();
+loadBadge();
+</script>
+</body>
+</html>

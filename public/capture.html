@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="capture-shell" id="stage">
+    <div class="capture-stage" id="captureStage">
+      <video id="liveVideo" autoplay muted playsinline></video>
+    </div>
+    <div class="capture-overlay-layer" id="overlayLayer"></div>
+
+    <div class="capture-topbar">
+      <button id="closeBtn" aria-label="Close">✕</button>
+      <button id="flipBtn" aria-label="Flip camera">🔄</button>
+    </div>
+
+    <div class="filter-strip" id="filterStrip"></div>
+    <div class="speed-strip" id="speedStrip">
+      <button class="speed-chip" data-speed="0.5">0.5x</button>
+      <button class="speed-chip active" data-speed="1">1x</button>
+      <button class="speed-chip" data-speed="2">2x</button>
+    </div>
+
+    <div class="capture-controls">
+      <button class="capture-side-tool" id="textToolBtn" aria-label="Add text">Aa</button>
+      <button class="capture-shutter" id="shutterBtn" aria-label="Hold for video, tap for photo"></button>
+      <button class="capture-side-tool" id="emojiToolBtn" aria-label="Add emoji">😊</button>
+    </div>
+
+    <div class="emoji-palette hidden" id="emojiPalette"></div>
+  </div>
+
+  <!-- Caption + post sheet, shown after a photo/video is captured -->
+  <div class="capture-caption-sheet hidden" id="captionSheet">
+    <div class="post-header">
+      <button class="cancel" id="retakeBtn">Retake</button>
+      <span class="title">New clip</span>
+      <button class="share" id="postBtn">Share</button>
+    </div>
+    <div class="preview-media" id="finalPreview"></div>
+    <div class="caption-field" style="margin:12px 18px;">
+      <textarea id="captionText" rows="2" placeholder="Write a caption…"></textarea>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+
+const stage = document.getElementById('captureStage');
+const liveVideo = document.getElementById('liveVideo');
+const overlayLayer = document.getElementById('overlayLayer');
+const shutterBtn = document.getElementById('shutterBtn');
+
+const FILTERS = [
+  { name: 'Normal', css: 'none' },
+  { name: 'Vivid', css: 'saturate(1.5) contrast(1.1)' },
+  { name: 'Mono', css: 'grayscale(1)' },
+  { name: 'Warm', css: 'sepia(0.3) saturate(1.3)' },
+  { name: 'Cool', css: 'hue-rotate(180deg) saturate(1.15)' },
+  { name: 'Vintage', css: 'sepia(0.4) contrast(0.9) brightness(0.9)' },
+];
+let currentFilter = FILTERS[0].css;
+let currentSpeed = 1;
+let facingMode = 'user';
+let currentStream = null;
+const overlays = []; // { id, type, content, xPct, yPct, fontSizePct }
+let overlaySeq = 0;
+
+document.getElementById('filterStrip').innerHTML = FILTERS.map((f, i) => `<button class="filter-chip ${i === 0 ? 'active' : ''}" data-css="${f.css}">${f.name}</button>`).join('');
+document.querySelectorAll('.filter-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.filter-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentFilter = chip.dataset.css;
+    liveVideo.style.filter = currentFilter;
+  });
+});
+
+document.querySelectorAll('.speed-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.speed-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentSpeed = Number(chip.dataset.speed);
+  });
+});
+
+const EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😜','🤩','🥳','😎','🔥','❤️','👍','🙌','💯','✨','🎉','😢','😮','👏','🙏','💀','😴'];
+const emojiPalette = document.getElementById('emojiPalette');
+emojiPalette.innerHTML = EMOJIS.map((e) => `<button type="button">${e}</button>`).join('');
+emojiPalette.querySelectorAll('button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    addSticker('emoji', btn.textContent, 50, 45, 8);
+    emojiPalette.classList.add('hidden');
+  });
+});
+document.getElementById('emojiToolBtn').addEventListener('click', () => emojiPalette.classList.toggle('hidden'));
+
+document.getElementById('textToolBtn').addEventListener('click', () => {
+  const id = addSticker('text', 'Tap to edit', 50, 35, 6);
+  const el = overlayLayer.querySelector(`[data-id="${id}"]`);
+  el.setAttribute('contenteditable', 'true');
+  el.textContent = '';
+  el.focus();
+  el.addEventListener('blur', () => {
+    el.removeAttribute('contenteditable');
+    if (!el.textContent.trim()) removeSticker(id);
+  }, { once: true });
+});
+
+function addSticker(type, content, xPct, yPct, fontSizePct) {
+  const id = ++overlaySeq;
+  overlays.push({ id, type, content, xPct, yPct, fontSizePct });
+  const el = document.createElement('div');
+  el.className = 'capture-sticker';
+  el.dataset.id = id;
+  el.style.left = xPct + '%';
+  el.style.top = yPct + '%';
+  el.style.fontSize = fontSizePct + 'vh';
+  el.style.color = '#fff';
+  el.textContent = content;
+  makeDraggable(el, id);
+  overlayLayer.appendChild(el);
+  return id;
+}
+
+function removeSticker(id) {
+  const idx = overlays.findIndex((o) => o.id === id);
+  if (idx !== -1) overlays.splice(idx, 1);
+  const el = overlayLayer.querySelector(`[data-id="${id}"]`);
+  if (el) el.remove();
+}
+
+// Drag to reposition; double-tap to remove.
+function makeDraggable(el, id) {
+  let dragging = false;
+  let lastTap = 0;
+  el.addEventListener('pointerdown', (e) => {
+    if (el.isContentEditable) return;
+    dragging = true;
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = overlayLayer.getBoundingClientRect();
+    const xPct = Math.min(96, Math.max(4, ((e.clientX - rect.left) / rect.width) * 100));
+    const yPct = Math.min(96, Math.max(4, ((e.clientY - rect.top) / rect.height) * 100));
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+    const o = overlays.find((x) => x.id === id);
+    if (o) { o.xPct = xPct; o.yPct = yPct; }
+  });
+  el.addEventListener('pointerup', () => {
+    dragging = false;
+    const now = Date.now();
+    if (now - lastTap < 300) removeSticker(id);
+    lastTap = now;
+  });
+}
+
+async function startCamera() {
+  if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+  try {
+    currentStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode }, audio: true,
+    });
+    liveVideo.srcObject = currentStream;
+    liveVideo.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+  } catch (err) {
+    alert('Couldn\u2019t access the camera. You can still post from your gallery on the New Post page.');
+    window.location.href = 'new-post.html';
+  }
+}
+
+document.getElementById('flipBtn').addEventListener('click', () => {
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  startCamera();
+});
+
+document.getElementById('closeBtn').addEventListener('click', () => {
+  if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+  window.location.href = 'feed.html';
+});
+
+/* ---------------- Capture: tap = photo, hold = video ---------------- */
+function coverCrop(videoW, videoH, containerW, containerH) {
+  const videoRatio = videoW / videoH;
+  const containerRatio = containerW / containerH;
+  let sx = 0, sy = 0, sw = videoW, sh = videoH;
+  if (videoRatio > containerRatio) {
+    sw = videoH * containerRatio;
+    sx = (videoW - sw) / 2;
+  } else {
+    sh = videoW / containerRatio;
+    sy = (videoH - sh) / 2;
+  }
+  return { sx, sy, sw, sh };
+}
+
+function buildBakeCanvas() {
+  const rect = stage.getBoundingClientRect();
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = Math.round(720 / (rect.width / rect.height));
+  return canvas;
+}
+
+function drawFrame(ctx, canvas) {
+  const rect = stage.getBoundingClientRect();
+  const { sx, sy, sw, sh } = coverCrop(liveVideo.videoWidth, liveVideo.videoHeight, rect.width, rect.height);
+  ctx.save();
+  ctx.filter = currentFilter;
+  if (facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(liveVideo, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  overlays.forEach((o) => {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round((o.fontSizePct / 100) * canvas.height)}px sans-serif`;
+    ctx.fillStyle = o.type === 'text' ? '#fff' : '#000';
+    if (o.type === 'text') {
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 6;
+    }
+    ctx.fillText(o.content, (o.xPct / 100) * canvas.width, (o.yPct / 100) * canvas.height);
+    ctx.restore();
+  });
+}
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordLoopId = null;
+let holdTimer = null;
+let isRecording = false;
+let capturedBlob = null;
+let capturedType = null; // 'image' | 'video'
+
+function capturePhoto() {
+  const canvas = buildBakeCanvas();
+  const ctx = canvas.getContext('2d');
+  drawFrame(ctx, canvas);
+  canvas.toBlob((blob) => {
+    capturedBlob = blob;
+    capturedType = 'image';
+    showCaptionSheet(URL.createObjectURL(blob), 'image');
+  }, 'image/jpeg', 0.92);
+}
+
+function startVideoRecording() {
+  const canvas = buildBakeCanvas();
+  const ctx = canvas.getContext('2d');
+  const canvasStream = canvas.captureStream(30);
+  const audioTrack = currentStream.getAudioTracks()[0];
+  if (audioTrack) canvasStream.addTrack(audioTrack);
+
+  recordedChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus' : 'video/webm';
+  mediaRecorder = new MediaRecorder(canvasStream, { mimeType });
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    cancelAnimationFrame(recordLoopId);
+    capturedBlob = new Blob(recordedChunks, { type: 'video/webm' });
+    capturedType = 'video';
+    const url = URL.createObjectURL(capturedBlob);
+    showCaptionSheet(url, 'video');
+  };
+  mediaRecorder.start();
+  isRecording = true;
+  shutterBtn.classList.add('recording');
+
+  const loop = () => {
+    drawFrame(ctx, canvas);
+    recordLoopId = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+function stopVideoRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  isRecording = false;
+  shutterBtn.classList.remove('recording');
+}
+
+shutterBtn.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  holdTimer = setTimeout(() => { startVideoRecording(); }, 280);
+});
+shutterBtn.addEventListener('pointerup', () => {
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+  if (isRecording) stopVideoRecording();
+  else capturePhoto();
+});
+
+function showCaptionSheet(url, type) {
+  document.getElementById('captionSheet').classList.remove('hidden');
+  const preview = document.getElementById('finalPreview');
+  if (type === 'video') {
+    preview.innerHTML = `<video src="${url}" controls autoplay loop playsinline></video>`;
+    preview.querySelector('video').playbackRate = currentSpeed;
+  } else {
+    preview.innerHTML = `<img src="${url}" alt="">`;
+  }
+}
+
+document.getElementById('retakeBtn').addEventListener('click', () => {
+  document.getElementById('captionSheet').classList.add('hidden');
+  document.getElementById('finalPreview').innerHTML = '';
+  document.getElementById('captionText').value = '';
+  capturedBlob = null;
+  capturedType = null;
+});
+
+document.getElementById('postBtn').addEventListener('click', async () => {
+  if (!capturedBlob) return;
+  const btn = document.getElementById('postBtn');
+  btn.disabled = true;
+  btn.textContent = 'Sharing…';
+  try {
+    const formData = new FormData();
+    formData.append('media', capturedBlob, capturedType === 'video' ? 'clip.webm' : 'photo.jpg');
+    formData.append('caption', document.getElementById('captionText').value.trim());
+    if (capturedType === 'video') formData.append('playbackRate', currentSpeed);
+    await Api.call('/posts', { method: 'POST', body: formData, isForm: true });
+    if (currentStream) currentStream.getTracks().forEach((t) => t.stop());
+    window.location.href = `profile.html?handle=${Api.user().handle}`;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+    btn.textContent = 'Share';
+  }
+});
+
+startCamera();
+</script>
+</body>
+</html>

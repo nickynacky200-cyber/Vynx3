@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="convo-header">
+    <a href="#" class="back" onclick="history.back(); return false;">‹</a>
+    <div class="name" id="pageTitle">…</div>
+  </div>
+  <div class="people-list" id="peopleList"><div class="empty-state">Loading…</div></div>
+  <div class="bottom-nav" id="bottomNav"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+Api.requireLogin();
+renderBottomNav('profile');
+
+const params = new URLSearchParams(window.location.search);
+const handle = params.get('handle');
+const type = params.get('type') === 'followers' ? 'followers' : 'following';
+document.getElementById('pageTitle').textContent = type === 'followers' ? 'Followers' : 'Following';
+
+async function load() {
+  const list = document.getElementById('peopleList');
+  try {
+    const data = await Api.call(`/users/${handle}/${type}`);
+    if (!data.users.length) {
+      list.innerHTML = `<div class="empty-state">No ${type} yet.</div>`;
+      return;
+    }
+    list.innerHTML = data.users.map((u) => `
+      <a class="people-row" href="profile.html?handle=${u.handle}">
+        <div class="avatar" style="width:42px;height:42px;font-size:0.75rem;background:${u.avatar_color};">${Api.avatarInner(u.full_name, u.avatar_url)}</div>
+        <div>
+          <div class="name">${u.full_name}</div>
+          <div class="handle">@${u.handle}</div>
+        </div>
+      </a>
+    `).join('');
+  } catch (err) {
+    list.innerHTML = '<div class="empty-state">Could not load this list.</div>';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

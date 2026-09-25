@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .post-wrap { max-width: 420px; margin: 40px auto; padding: 0 16px; }
+  .post-media { width: 100%; border-radius: 16px; background: var(--panel); overflow: hidden; aspect-ratio: 4/5; position: relative; }
+  .post-media img, .post-media video { width: 100%; height: 100%; object-fit: cover; }
+  .post-author { display: flex; align-items: center; gap: 10px; margin: 16px 0 10px; }
+  .post-author .name { font-weight: 700; }
+  .post-author .handle { color: var(--slate); font-size: 0.85rem; }
+  .post-caption { line-height: 1.5; margin-bottom: 24px; }
+  .cta { text-align: center; }
+  .state-msg { text-align: center; color: var(--slate); margin-top: 60px; }
+</style>
+</head>
+<body>
+<div class="post-wrap">
+  <div class="wordmark" style="text-align:center; margin-bottom:24px;">Vynx</div>
+  <div id="content"><div class="state-msg">Loading…</div></div>
+</div>
+
+<script>
+async function loadPost() {
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('id');
+  const content = document.getElementById('content');
+  if (!id) {
+    content.innerHTML = '<div class="state-msg">No post specified.</div>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/posts/${id}`);
+    if (!res.ok) {
+      content.innerHTML = '<div class="state-msg">This post isn\u2019t available. It may be private or deleted.</div>';
+      return;
+    }
+    const { post } = await res.json();
+    const mediaHtml = post.mediaType === 'video'
+      ? `<video src="${post.mediaUrl}" muted loop autoplay playsinline></video>`
+      : `<img src="${post.mediaUrl}" alt="">`;
+
+    content.innerHTML = `
+      <div class="post-media">${mediaHtml}</div>
+      <div class="post-author">
+        <div>
+          <div class="name">${escapeHtml(post.author.fullName)}</div>
+          <div class="handle">@${escapeHtml(post.author.handle)}</div>
+        </div>
+      </div>
+      ${post.caption ? `<div class="post-caption">${escapeHtml(post.caption)}</div>` : ''}
+      <div class="cta">
+        <a class="btn btn-primary btn-block" href="vynx://post/${post.id}">Open in Vynx app</a>
+      </div>
+    `;
+  } catch {
+    content.innerHTML = '<div class="state-msg">Something went wrong loading this post.</div>';
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+loadPost();
+</script>
+</body>
+</html>

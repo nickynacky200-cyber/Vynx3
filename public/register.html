@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create your account — Vynx</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div class="auth-wrap">
+    <div class="wordmark">Vynx</div>
+    <div class="tag">Create your account</div>
+
+    <div id="alertBox"></div>
+
+    <form id="registerForm">
+      <div class="field"><label for="fullName">Full name</label><input id="fullName" required autocomplete="name"></div>
+      <div class="field"><label for="handle">Handle</label><input id="handle" required placeholder="e.g. kemijide" autocomplete="username"></div>
+      <div class="field"><label for="email">Email</label><input id="email" type="email" required autocomplete="email"></div>
+      <div class="field"><label for="password">Password</label><input id="password" type="password" required minlength="6" autocomplete="new-password"></div>
+      <button type="submit" class="btn btn-primary btn-block" id="submitBtn">Create account</button>
+    </form>
+
+    <div class="auth-switch">Already have an account? <a href="login.html">Log in</a></div>
+  </div>
+</div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/api.js"></script>
+<script>
+// Friendlier copy for Firebase's error codes than its raw messages.
+function firebaseAuthErrorMessage(err) {
+  switch (err.code) {
+    case 'auth/email-already-in-use':
+      return 'That email is already registered — try logging in instead.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/network-request-failed':
+      return 'Network error. Check your connection and try again.';
+    default:
+      return err.message || 'Something went wrong. Please try again.';
+  }
+}
+
+document.getElementById('registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('submitBtn');
+  const alertBox = document.getElementById('alertBox');
+  alertBox.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Creating account…';
+
+  const fullName = document.getElementById('fullName').value.trim();
+  const handle = document.getElementById('handle').value.trim();
+  let createdFirebaseUser = false;
+
+  try {
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+
+    await auth.createUserWithEmailAndPassword(email, password);
+    createdFirebaseUser = true;
+    await auth.currentUser.updateProfile({ displayName: fullName });
+
+    // Creates the local profile row (handle, bio, avatar color) tied to
+    // this new Firebase user.
+    const data = await Api.call('/auth/sync', { method: 'POST', body: { fullName, handle } });
+    Api.setProfile(data.user);
+    window.location.href = 'feed.html';
+  } catch (err) {
+    // If the handle was taken (or any other backend validation failed)
+    // after Firebase already created the account, remove the orphaned
+    // Firebase user so the person can try again with the same email.
+    if (createdFirebaseUser && auth.currentUser) {
+      await auth.currentUser.delete().catch(() => {});
+    }
+    alertBox.innerHTML = `<div class="alert alert-error">${firebaseAuthErrorMessage(err)}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Create account';
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+Railway deployment intentionally does not run Expo.
+The Android Expo app is separate and connects to the same Vynx backend.
